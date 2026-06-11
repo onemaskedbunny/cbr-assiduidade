@@ -88,11 +88,35 @@
       </div>
       <div style="overflow:auto;margin-top:18px">
         <table class="table">
-          <thead><tr><th>Colaborador</th><th>Entrada</th><th>Saída</th><th>Duração</th><th>Estado</th><th>Origem</th></tr></thead>
+          <thead><tr><th>Colaborador</th><th>Entrada</th><th>Saída</th><th>Duração</th><th>Estado</th><th>Origem</th><th>Ações</th></tr></thead>
           <tbody id="personRows"></tbody>
         </table>
       </div>
       <div class="toast" id="reportMsg">Seleciona colaborador e período, ou deixa em “Todos”.</div>
+      <div id="editAttendanceBox" class="stat span12" style="display:none;margin-top:16px">
+        <h2 style="margin-bottom:12px">Editar registo</h2>
+        <input id="editAttId" type="hidden">
+        <div class="toolbar">
+          <div>
+            <label>Tipo</label>
+            <select id="editAttType">
+              <option value="entrada">Entrada</option>
+              <option value="saida">Saída</option>
+            </select>
+          </div>
+          <div>
+            <label>Data e hora</label>
+            <input id="editAttTs" type="datetime-local">
+          </div>
+          <div>
+            <label>Nota</label>
+            <input id="editAttNote" placeholder="Motivo da correção">
+          </div>
+          <button class="btn ok" id="saveAttendanceEdit">Guardar</button>
+          <button class="btn secondary" id="cancelAttendanceEdit">Cancelar</button>
+        </div>
+        <div class="toast" id="editAttMsg">Altera apenas registos quando houver motivo operacional.</div>
+      </div>
     </article>
 
     <article class="card two">
@@ -120,6 +144,7 @@ function fmtDateInput(d){return d.toISOString().slice(0,10)}
 function fmtDuration(min){if(min===null || min===undefined) return '—'; const h=Math.floor(min/60), m=min%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`}
 function todayLocalDate(){return fmtDateInput(new Date())}
 function nowLocalInput(){const d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,16)}
+function localInputFromIso(iso){if(!iso)return ''; const d=new Date(iso); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,16)}
 async function api(url, opts = {}) {
   const token = localStorage.getItem('cbr_admin_token');
 
@@ -211,11 +236,70 @@ async function loadPersonView(){
   $('personRows').innerHTML=currentSessions.map(s=>{
     const manual=(s.entrada?.manual||s.saida?.manual)?'Manual':'Normal';
     const state=s.status==='fechado'?'<span class="okText">Fechado</span>':s.status==='sem_saida'?'<span class="dangerText">Sem saída</span>':'<span class="dangerText">Saída sem entrada</span>';
-    return `<tr><td><b>${s.name}</b><br><span class="muted">${s.department||'—'}</span></td><td>${fmt(s.entrada?.ts)}</td><td>${fmt(s.saida?.ts)}</td><td>${fmtDuration(s.minutes)}</td><td>${state}</td><td>${manual}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" class="muted">Sem registos no período.</td></tr>';
+    const entradaNote=String(s.entrada?.note || '').replace(/'/g, "\'");
+    const saidaNote=String(s.saida?.note || '').replace(/'/g, "\'");
+    const actions=[
+      s.entrada ? `<button class="btn secondary" onclick="editAttendance('${s.entrada.id}','entrada','${s.entrada.ts || ''}','${entradaNote}')">Editar entrada</button>` : '',
+      s.entrada ? `<button class="btn secondary" onclick="toggleAttendance('${s.entrada.id}',false)">Anular entrada</button>` : '',
+      s.entrada ? `<button class="btn danger" onclick="deleteAttendance('${s.entrada.id}')">Apagar entrada</button>` : '',
+      s.saida ? `<button class="btn secondary" onclick="editAttendance('${s.saida.id}','saida','${s.saida.ts || ''}','${saidaNote}')">Editar saída</button>` : '',
+      s.saida ? `<button class="btn secondary" onclick="toggleAttendance('${s.saida.id}',false)">Anular saída</button>` : '',
+      s.saida ? `<button class="btn danger" onclick="deleteAttendance('${s.saida.id}')">Apagar saída</button>` : ''
+    ].filter(Boolean).join(' ');
+    return `<tr><td><b>${s.name}</b><br><span class="muted">${s.department||'—'}</span></td><td>${fmt(s.entrada?.ts)}</td><td>${fmt(s.saida?.ts)}</td><td>${fmtDuration(s.minutes)}</td><td>${state}</td><td>${manual}</td><td><div class="row">${actions || '—'}</div></td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">Sem registos no período.</td></tr>';
   $('reportMsg').textContent=`✅ ${currentSessions.length} linhas carregadas.`;
 }
 $('loadPerson').onclick=loadPersonView;
+
+window.editAttendance=(id,type,ts,note='')=>{
+  $('editAttId').value=id;
+  $('editAttType').value=type;
+  $('editAttTs').value=localInputFromIso(ts);
+  $('editAttNote').value=note || '';
+  $('editAttendanceBox').style.display='block';
+  $('editAttMsg').textContent='A editar registo '+id+'.';
+  $('editAttendanceBox').scrollIntoView({behavior:'smooth',block:'center'});
+};
+
+$('cancelAttendanceEdit').onclick=()=>{
+  $('editAttendanceBox').style.display='none';
+  $('editAttMsg').textContent='Altera apenas registos quando houver motivo operacional.';
+};
+
+$('saveAttendanceEdit').onclick=async()=>{
+  try{
+    const id=$('editAttId').value;
+    if(!id) throw new Error('Nenhum registo selecionado.');
+    await api('/api/attendance/'+id,{
+      method:'PATCH',
+      body:JSON.stringify({
+        type:$('editAttType').value,
+        ts:$('editAttTs').value,
+        note:$('editAttNote').value
+      })
+    });
+    $('editAttMsg').textContent='✅ Registo atualizado.';
+    $('editAttendanceBox').style.display='none';
+    await loadAll();
+  }catch(e){
+    $('editAttMsg').textContent='⚠️ '+e.message;
+  }
+};
+
+window.toggleAttendance=async(id,valid)=>{
+  const action=valid?'reativar':'anular';
+  if(!confirm('Confirmas que queres '+action+' este registo?')) return;
+  await api('/api/attendance/'+id,{method:'PATCH',body:JSON.stringify({valid})});
+  await loadAll();
+};
+
+window.deleteAttendance=async(id)=>{
+  if(!confirm('Apagar definitivamente este registo? Esta ação não pode ser revertida.')) return;
+  await api('/api/attendance/'+id,{method:'DELETE'});
+  await loadAll();
+};
+
 
 async function loadDashboardStats(){
   const q=new URLSearchParams({from:todayLocalDate(),to:todayLocalDate()});

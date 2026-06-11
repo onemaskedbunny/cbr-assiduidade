@@ -57,9 +57,19 @@
     const confirmEntrada = document.getElementById('confirmEntrada');
 
     let me = null;
+    let staffToken = localStorage.getItem('cbr_staff_token') || '';
 
     function hideConfirm(){
       confirmArea.style.display = 'none';
+    }
+
+    function showWorkArea(employee){
+      me = employee;
+      document.getElementById('who').textContent =
+        `${me.name}${me.department ? ' · ' + me.department : ''}`;
+      auth.style.display = 'none';
+      work.style.display = 'block';
+      msg.textContent = 'Escolhe Entrada ou Saída.';
     }
 
     function formatDateTimePT(iso){
@@ -77,7 +87,7 @@
       }
 
       const r = await fetch('/api/qr/check/' + token);
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
 
       if(!r.ok){
         msg.textContent = '⚠️ ' + (d.error === 'QR_EXPIRADO'
@@ -91,35 +101,70 @@
     }
 
     async function refreshMe(){
-      const r = await fetch('/api/staff/me');
+      if(!staffToken) return false;
+
+      const r = await fetch('/api/staff/me', {
+        cache: 'no-store',
+        headers: {
+          'Authorization': 'Bearer ' + staffToken
+        }
+      });
 
       if(r.ok){
-        me = await r.json();
-        document.getElementById('who').textContent = `${me.name}${me.department ? ' · ' + me.department : ''}`;
-        auth.style.display = 'none';
-        work.style.display = 'block';
-        msg.textContent = 'Escolhe Entrada ou Saída.';
+        showWorkArea(await r.json());
+        return true;
       }
+
+      localStorage.removeItem('cbr_staff_token');
+      staffToken = '';
+      return false;
     }
 
     async function doPasskeyLogin(){
-      msg.textContent = 'A abrir passkey…';
+      msg.textContent = '1/4 A pedir opções...';
 
-      let r = await fetch('/api/passkey/auth/options', { method:'POST' });
-      let opts = await r.json();
+      let r = await fetch('/api/passkey/auth/options', {
+        method:'POST',
+        cache:'no-store'
+      });
 
+      let opts = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(opts.error || 'Erro ao preparar passkey');
+
+      msg.textContent = '2/4 A abrir passkey do telemóvel...';
       const asseResp = await startAuthentication(opts);
+
+      msg.textContent = '3/4 A validar passkey...';
 
       r = await fetch('/api/passkey/auth/verify', {
         method:'POST',
+        cache:'no-store',
         headers:{ 'Content-Type':'application/json' },
         body: JSON.stringify({ response: asseResp })
       });
 
-      const out = await r.json();
-      if(!r.ok) throw new Error(out.details || out.error);
+      const out = await r.json().catch(() => ({}));
 
-      await refreshMe();
+      if(!r.ok){
+        console.log('PASSKEY VERIFY ERROR:', out);
+        throw new Error(out.details || out.error || 'Erro ao validar passkey');
+      }
+
+      if(!out.staffToken){
+        console.log('PASSKEY VERIFY RESPONSE WITHOUT TOKEN:', out);
+        throw new Error('Sessão não recebida do servidor.');
+      }
+
+      staffToken = out.staffToken;
+      localStorage.setItem('cbr_staff_token', staffToken);
+
+      if(out.employee){
+        showWorkArea(out.employee);
+      }else{
+        await refreshMe();
+      }
+
+      return true;
     }
 
     login.onclick = async () => {
@@ -132,23 +177,36 @@
       }
     };
 
+    async function ensureLoggedIn(){
+      if(staffToken) return true;
+      return await doPasskeyLogin();
+    }
+
     async function mark(type, forceNew = false){
       try{
         hideConfirm();
 
-        if(type === 'entrada' && !forceNew){
-          await doPasskeyLogin();
+        if(!forceNew){
+          await ensureLoggedIn();
+        }
+
+        if(!staffToken){
+          throw new Error('Sessão inválida. Entra novamente com passkey.');
         }
 
         msg.textContent = 'A registar…';
 
         const r = await fetch('/api/attendance/mark', {
           method:'POST',
-          headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify({ token, type, forceNew })
+          cache:'no-store',
+          headers:{
+            'Content-Type':'application/json',
+            'Authorization':'Bearer ' + staffToken
+          },
+          body: JSON.stringify({ token, type, forceNew, staffToken })
         });
 
-        const out = await r.json();
+        const out = await r.json().catch(() => ({}));
 
         if(!r.ok){
           if(out.error === 'JA_EXISTE_ENTRADA_ATIVA' && type === 'entrada' && out.activeEntry){
@@ -159,7 +217,7 @@
             return;
           }
 
-          throw new Error(out.error);
+          throw new Error(out.error || 'Erro ao registar ponto');
         }
 
         msg.textContent = (type === 'entrada' ? '✅ Entrada' : '✅ Saída') +
@@ -172,17 +230,19 @@
           NAO_EXISTE_ENTRADA_ABERTA:'Não existe entrada anterior para fechar.',
           QR_EXPIRADO:'QR expirado. Lê novamente o código no tablet.',
           QR_INVALIDO:'QR inválido.',
-          NAO_AUTORIZADO:'Sessão inválida. Entra novamente com passkey.'
+          NAO_AUTORIZADO:'Sessão inválida. Entra novamente com passkey.',
+          SEM_SESSAO:'Sessão inválida. Entra novamente com passkey.'
         };
 
         msg.textContent = '⚠️ ' + (map[e.message] || e.message);
+        console.error(e);
       }
     }
 
     document.getElementById('entrada').onclick = () => mark('entrada');
     document.getElementById('saida').onclick = () => mark('saida');
 
-    checkQr().then(refreshMe);
+    checkQr();
   </script>
 </body>
 </html>

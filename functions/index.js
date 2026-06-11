@@ -211,44 +211,250 @@ app.post('/passkey/register/verify', async (req, res) => {
 });
 app.post('/passkey/auth/options', async (_req, res) => { const options = await generateAuthenticationOptions({ rpID: RP_ID, timeout: 60000, userVerification: 'required', allowCredentials: [] }); await setDoc('challenges', 'auth', { challenge: options.challenge, ts: Date.now() }); res.json(options); });
 app.post('/passkey/auth/verify', async (req, res) => {
-  const { response } = req.body || {}; const ch = await getDoc('challenges', 'auth'); if (!ch?.challenge) return res.status(400).json({ error: 'CHALLENGE_EXPIRADO' });
-  const credentialID = normalizeCredentialId(response?.id); const employees = await listCollection('employees'); const emp = employees.find(e => e.credentials?.some(c => c.credentialID === credentialID));
-  if (!emp || !emp.active) { await addEvent('warning', 'Tentativa com passkey desconhecida/inativa', { credentialID }); return res.status(403).json({ error: 'PASSKEY_DESCONHECIDA' }); }
+  const { response } = req.body || {};
+  const ch = await getDoc('challenges', 'auth');
+
+  if (!ch?.challenge) {
+    return res.status(400).json({ error: 'CHALLENGE_EXPIRADO' });
+  }
+
+  const credentialID = normalizeCredentialId(response?.id);
+  const employees = await listCollection('employees');
+  const emp = employees.find(e => e.credentials?.some(c => c.credentialID === credentialID));
+
+  if (!emp || !emp.active) {
+    await addEvent('warning', 'Tentativa com passkey desconhecida/inativa', { credentialID });
+    return res.status(403).json({ error: 'PASSKEY_DESCONHECIDA' });
+  }
+
   const authenticator = emp.credentials.find(c => c.credentialID === credentialID);
+
   try {
-    const verification = await verifyAuthenticationResponse({ response, expectedChallenge: ch.challenge, expectedOrigin: ALLOWED_ORIGINS, expectedRPID: RP_ID, requireUserVerification: true, credential: { id: authenticator.credentialID, publicKey: Buffer.from(authenticator.credentialPublicKey, 'base64url'), counter: authenticator.counter, transports: authenticator.transports || [] } });
-    if (!verification.verified) return res.status(400).json({ error: 'PASSKEY_NAO_VERIFICADA' });
-    authenticator.counter = verification.authenticationInfo?.newCounter ?? authenticator.counter; await setDoc('employees', emp.id, emp); await deleteDoc('challenges', 'auth');
-    const sessionToken = id('sess'); await setDoc('sessions', sessionToken, { employeeId: emp.id, ts: Date.now() });
-    res.cookie('cbr_staff_session', sessionToken, { httpOnly: true, sameSite: 'lax', secure: requestOrigin(req).startsWith('https://'), maxAge: 1000 * 60 * 60 * 10 });
-    res.json({ ok: true, employee: { id: emp.id, name: emp.name, email: emp.email, department: emp.department } });
-  } catch (err) { console.error(err); await addEvent('warning', `Falha de autenticação passkey: ${emp.name}`, { employeeId: emp.id, error: err.message }); res.status(400).json({ error: 'ERRO_AUTH_PASSKEY', details: err.message }); }
+    const verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: ch.challenge,
+      expectedOrigin: ALLOWED_ORIGINS,
+      expectedRPID: RP_ID,
+      requireUserVerification: true,
+      credential: {
+        id: authenticator.credentialID,
+        publicKey: Buffer.from(authenticator.credentialPublicKey, 'base64url'),
+        counter: authenticator.counter,
+        transports: authenticator.transports || []
+      }
+    });
+
+    if (!verification.verified) {
+      return res.status(400).json({ error: 'PASSKEY_NAO_VERIFICADA' });
+    }
+
+    authenticator.counter = verification.authenticationInfo?.newCounter ?? authenticator.counter;
+    await setDoc('employees', emp.id, emp);
+    await deleteDoc('challenges', 'auth');
+
+    const sessionToken = id('sess');
+
+    await setDoc('sessions', sessionToken, {
+      token: sessionToken,
+      employeeId: emp.id,
+      ts: Date.now(),
+      expiresAt: Date.now() + 1000 * 60 * 60 * 10
+    });
+
+    return res.json({
+      ok: true,
+      staffToken: sessionToken,
+      employee: {
+        id: emp.id,
+        name: emp.name,
+        email: emp.email,
+        department: emp.department
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    await addEvent('warning', `Falha de autenticação passkey: ${emp.name}`, {
+      employeeId: emp.id,
+      error: err.message
+    });
+    return res.status(400).json({ error: 'ERRO_AUTH_PASSKEY', details: err.message });
+  }
 });
-app.get('/staff/me', async (req, res) => { const sessId = req.cookies.cbr_staff_session; const sess = sessId ? await getDoc('sessions', sessId) : null; const emp = sess ? await getEmployee(sess.employeeId) : null; if (!emp) return res.status(401).json({ error: 'SEM_SESSAO' }); res.json({ id: emp.id, name: emp.name, email: emp.email, department: emp.department, active: emp.active, deviceAuthorized: emp.deviceAuthorized }); });
+app.get('/staff/me', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const tokenFromHeader = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const token = tokenFromHeader || req.query.staffToken || req.cookies.cbr_staff_session || '';
+
+  const sess = token ? await getDoc('sessions', token) : null;
+
+  if (!sess || Date.now() > sess.expiresAt) {
+    return res.status(401).json({ error: 'SEM_SESSAO' });
+  }
+
+  const emp = await getEmployee(sess.employeeId);
+
+  if (!emp || !emp.active) {
+    return res.status(401).json({ error: 'SEM_SESSAO' });
+  }
+
+  return res.json({
+    id: emp.id,
+    name: emp.name,
+    email: emp.email,
+    department: emp.department,
+    active: emp.active,
+    deviceAuthorized: emp.deviceAuthorized
+  });
+});
 
 app.post('/qr/new', async (req, res) => { const token = id('qr'); const now = Date.now(); const url = publicUrl(req, `/assiduidade.html?t=${token}`); const qr = { token, createdAt: now, expiresAt: now + 45000, used: false }; await setDoc('qrTokens', token, qr); const qrDataUrl = await QRCode.toDataURL(url, { width: 420, margin: 1, color: { dark: '#071326', light: '#ffffff' } }); res.json({ token, expiresAt: qr.expiresAt, url, qrDataUrl }); });
 app.get('/qr/check/:token', async (req, res) => { const qr = await getDoc('qrTokens', req.params.token); if (!qr) return res.status(404).json({ ok: false, error: 'QR_INVALIDO' }); if (Date.now() > qr.expiresAt) return res.status(410).json({ ok: false, error: 'QR_EXPIRADO' }); res.json({ ok: true, expiresAt: qr.expiresAt }); });
 app.post('/attendance/mark', async (req, res) => {
-  const { token, type, forceNew } = req.body || {}; if (!['entrada','saida'].includes(type)) return res.status(400).json({ error: 'TIPO_INVALIDO' });
-  const sessId = req.cookies.cbr_staff_session; const sess = sessId ? await getDoc('sessions', sessId) : null; const emp = sess ? await getEmployee(sess.employeeId) : null;
-  if (!emp || !emp.active || !emp.deviceAuthorized) return res.status(401).json({ error: 'NAO_AUTORIZADO' });
-  const qr = await getDoc('qrTokens', token); if (!qr) { await addEvent('warning', 'Tentativa com QR inválido', { employeeId: emp.id }); return res.status(404).json({ error: 'QR_INVALIDO' }); } if (Date.now() > qr.expiresAt) { await addEvent('warning', 'Tentativa com QR expirado', { employeeId: emp.id }); return res.status(410).json({ error: 'QR_EXPIRADO' }); }
-  const rows = await attendanceRows({ employeeId: emp.id }); const last = rows.filter(a => a.valid !== false)[0];
-  if (type === 'entrada' && last?.type === 'entrada' && !forceNew) return res.status(409).json({ error: 'JA_EXISTE_ENTRADA_ATIVA', activeEntry: { id: last.id, ts: last.ts, name: last.name } });
-  if (type === 'saida' && (!last || last.type === 'saida')) return res.status(409).json({ error: 'NAO_EXISTE_ENTRADA_ABERTA' });
-  const record = { id: id('att'), employeeId: emp.id, name: emp.name, department: emp.department, type, ts: nowISO(), qrToken: token, valid: true, manual: false, forcedNewEntry: type === 'entrada' && last?.type === 'entrada' && !!forceNew };
-  await setDoc('attendance', record.id, record); qr.used = true; qr.usedBy = emp.id; await setDoc('qrTokens', token, qr);
-  if (record.forcedNewEntry) await addEvent('warning', `Nova entrada iniciada sem saída anterior: ${emp.name}`, { employeeId: emp.id, previousAttendanceId: last.id, attendanceId: record.id }); else await addEvent(type, `${type === 'entrada' ? 'Entrada' : 'Saída'} registada: ${emp.name}`, { employeeId: emp.id, attendanceId: record.id });
-  res.json({ ok: true, record });
+  const { token, type, forceNew, staffToken } = req.body || {};
+
+  if (!['entrada', 'saida'].includes(type)) {
+    return res.status(400).json({ error: 'TIPO_INVALIDO' });
+  }
+
+  const auth = req.headers.authorization || '';
+  const tokenFromHeader = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const sessId = tokenFromHeader || staffToken || req.cookies.cbr_staff_session || '';
+
+  const sess = sessId ? await getDoc('sessions', sessId) : null;
+
+  if (!sess || Date.now() > sess.expiresAt) {
+    return res.status(401).json({ error: 'NAO_AUTORIZADO' });
+  }
+
+  const emp = await getEmployee(sess.employeeId);
+
+  if (!emp || !emp.active || !emp.deviceAuthorized) {
+    return res.status(401).json({ error: 'NAO_AUTORIZADO' });
+  }
+
+  const qr = await getDoc('qrTokens', token);
+
+  if (!qr) {
+    await addEvent('warning', 'Tentativa com QR inválido', { employeeId: emp.id });
+    return res.status(404).json({ error: 'QR_INVALIDO' });
+  }
+
+  if (Date.now() > qr.expiresAt) {
+    await addEvent('warning', 'Tentativa com QR expirado', { employeeId: emp.id });
+    return res.status(410).json({ error: 'QR_EXPIRADO' });
+  }
+
+  const rows = await attendanceRows({ employeeId: emp.id });
+  const last = rows.filter(a => a.valid !== false)[0];
+
+  if (type === 'entrada' && last?.type === 'entrada' && !forceNew) {
+    return res.status(409).json({
+      error: 'JA_EXISTE_ENTRADA_ATIVA',
+      activeEntry: { id: last.id, ts: last.ts, name: last.name }
+    });
+  }
+
+  if (type === 'saida' && (!last || last.type === 'saida')) {
+    return res.status(409).json({ error: 'NAO_EXISTE_ENTRADA_ABERTA' });
+  }
+
+  const record = {
+    id: id('att'),
+    employeeId: emp.id,
+    name: emp.name,
+    department: emp.department,
+    type,
+    ts: nowISO(),
+    qrToken: token,
+    valid: true,
+    manual: false,
+    forcedNewEntry: type === 'entrada' && last?.type === 'entrada' && !!forceNew
+  };
+
+  await setDoc('attendance', record.id, record);
+
+  qr.used = true;
+  qr.usedBy = emp.id;
+  await setDoc('qrTokens', token, qr);
+
+  if (record.forcedNewEntry) {
+    await addEvent('warning', `Nova entrada iniciada sem saída anterior: ${emp.name}`, {
+      employeeId: emp.id,
+      previousAttendanceId: last.id,
+      attendanceId: record.id
+    });
+  } else {
+    await addEvent(type, `${type === 'entrada' ? 'Entrada' : 'Saída'} registada: ${emp.name}`, {
+      employeeId: emp.id,
+      attendanceId: record.id
+    });
+  }
+
+  return res.json({ ok: true, record });
 });
 app.post('/attendance/manual', requireAdmin, async (req, res) => { const { employeeId, type, ts, note } = req.body || {}; if (!['entrada','saida'].includes(type)) return res.status(400).json({ error: 'TIPO_INVALIDO' }); const emp = await getEmployee(employeeId); if (!emp) return res.status(404).json({ error: 'COLABORADOR_INVALIDO' }); const iso = toIsoFromLocalInput(ts); if (!iso) return res.status(400).json({ error: 'DATA_INVALIDA' }); const record = { id: id('att'), employeeId: emp.id, name: emp.name, department: emp.department, type, ts: iso, valid: true, manual: true, note: note || '', createdAt: nowISO(), createdBy: 'manager' }; await setDoc('attendance', record.id, record); await addEvent('admin', `Registo manual: ${type} · ${emp.name}`, { employeeId: emp.id, attendanceId: record.id, ts: iso }); res.json({ ok: true, record }); });
-app.patch('/attendance/:attId', requireAdmin, async (req, res) => { const rec = await getDoc('attendance', req.params.attId); if (!rec) return res.status(404).json({ error: 'REGISTO_NAO_ENCONTRADO' }); const { valid, note } = req.body || {}; if (valid !== undefined) rec.valid = !!valid; if (note !== undefined) rec.note = note; rec.updatedAt = nowISO(); await setDoc('attendance', rec.id, rec); await addEvent('admin', `${rec.valid ? 'Registo reativado' : 'Registo anulado'}: ${rec.name}`, { attendanceId: rec.id, employeeId: rec.employeeId }); res.json({ ok: true, record: rec }); });
+app.patch('/attendance/:attId', requireAdmin, async (req, res) => {
+  const rec = await getDoc('attendance', req.params.attId);
+
+  if (!rec) {
+    return res.status(404).json({ error: 'REGISTO_NAO_ENCONTRADO' });
+  }
+
+  const { valid, note, type, ts } = req.body || {};
+
+  if (type !== undefined) {
+    if (!['entrada', 'saida'].includes(type)) {
+      return res.status(400).json({ error: 'TIPO_INVALIDO' });
+    }
+    rec.type = type;
+  }
+
+  if (ts !== undefined) {
+    const iso = toIsoFromLocalInput(ts);
+    if (!iso) return res.status(400).json({ error: 'DATA_INVALIDA' });
+    rec.ts = iso;
+  }
+
+  if (valid !== undefined) rec.valid = !!valid;
+  if (note !== undefined) rec.note = note;
+
+  rec.manual = true;
+  rec.updatedAt = nowISO();
+  rec.updatedBy = 'manager';
+
+  await setDoc('attendance', rec.id, rec);
+
+  await addEvent('admin', `Registo editado manualmente: ${rec.name}`, {
+    attendanceId: rec.id,
+    employeeId: rec.employeeId
+  });
+
+  res.json({ ok: true, record: rec });
+});
+
+app.delete('/attendance/:attId', requireAdmin, async (req, res) => {
+  const rec = await getDoc('attendance', req.params.attId);
+
+  if (!rec) {
+    return res.status(404).json({ error: 'REGISTO_NAO_ENCONTRADO' });
+  }
+
+  await deleteDoc('attendance', rec.id);
+
+  await addEvent('admin', `Registo apagado definitivamente: ${rec.name}`, {
+    attendanceId: rec.id,
+    employeeId: rec.employeeId
+  });
+
+  res.json({ ok: true });
+});
 app.get('/attendance', requireAdmin, async (req, res) => res.json(await attendanceRows(req.query)));
 app.get('/attendance/sessions', requireAdmin, async (req, res) => res.json(pairSessions(await attendanceRows(req.query))));
 app.get('/events', requireAdmin, async (req, res) => res.json(await listEvents(req.query.limit || 80)));
+
 app.get('/debug', (req, res) => res.json({
   ok: true,
-  version: 'admin-token-v2',
+  version: 'staff-token-v3',
   origin: requestOrigin(req),
   publicOrigin: PUBLIC_ORIGIN,
   allowedOrigins: ALLOWED_ORIGINS,
