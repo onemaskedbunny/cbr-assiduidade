@@ -1,5 +1,6 @@
 {
   "hosting": {
+  "site": "cbr-assiduidade",
     "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
