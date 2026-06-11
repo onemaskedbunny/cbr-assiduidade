@@ -17,6 +17,12 @@ const fsdb = admin.firestore();
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
 app.use((req, _res, next) => { if (req.url.startsWith('/api/')) req.url = req.url.slice(4); next(); });
 
 const RP_NAME = process.env.RP_NAME || 'CBR Boutique Hotel - Assiduidade';
@@ -34,7 +40,20 @@ function normalizeCredentialId(value) { if (!value) return ''; if (typeof value 
 function requestOrigin(req) { const proto = req.headers['x-forwarded-proto'] || 'https'; const host = req.headers['x-forwarded-host'] || req.headers.host; return host ? `${proto}://${host}`.replace(/\/$/, '') : PUBLIC_ORIGIN; }
 function publicUrl(req, pathname) { const origin = ALLOWED_ORIGINS.includes(requestOrigin(req)) ? requestOrigin(req) : PUBLIC_ORIGIN; return `${origin}${pathname}`; }
 function toIsoFromLocalInput(value) { if (!value) return nowISO(); const d = new Date(value); return Number.isNaN(d.getTime()) ? null : d.toISOString(); }
-function requireAdmin(req, res, next) { if (req.cookies.cbr_admin === '1') return next(); return res.status(401).json({ error: 'ADMIN_LOGIN_REQUIRED' }); }
+async function requireAdmin(req, res, next) {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (!token) return res.status(401).json({ error: 'ADMIN_LOGIN_REQUIRED' });
+
+  const session = await getDoc('adminSessions', token);
+
+  if (!session || Date.now() > session.expiresAt) {
+    return res.status(401).json({ error: 'ADMIN_SESSION_EXPIRED' });
+  }
+
+  next();
+}
 
 const col = name => fsdb.collection(name);
 async function listCollection(name) { const snap = await col(name).get(); return snap.docs.map(d => d.data()); }
@@ -79,16 +98,73 @@ function pairSessions(rows) {
 
 app.post('/admin/login', async (req, res) => {
   const { email, password } = req.body || {};
-  if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-    res.cookie('cbr_admin', '1', { httpOnly: true, sameSite: 'lax', secure: requestOrigin(req).startsWith('https://'), maxAge: 1000 * 60 * 60 * 12 });
+
+  const cleanEmail = String(email || '').trim();
+  const cleanPassword = String(password || '').trim();
+  const expectedEmail = String(ADMIN_EMAIL || '').trim();
+  const expectedPassword = String(ADMIN_PASSWORD || '').trim();
+
+  if (cleanEmail === expectedEmail && cleanPassword === expectedPassword) {
+    const token = id('adminsess');
+
+    await setDoc('adminSessions', token, {
+      token,
+      email,
+      createdAt: nowISO(),
+      expiresAt: Date.now() + 1000 * 60 * 60 * 12
+    });
+
     await addEvent('admin', 'Admin iniciou sessão', { email });
-    return res.json({ ok: true });
+
+    return res.json({ ok: true, token });
   }
+
   await addEvent('warning', 'Tentativa falhada de login admin', { email });
   return res.status(403).json({ error: 'LOGIN_INVALIDO' });
 });
-app.post('/admin/logout', (_req, res) => { res.clearCookie('cbr_admin'); res.json({ ok: true }); });
-app.get('/admin/me', (req, res) => res.json({ admin: req.cookies.cbr_admin === '1' }));
+
+app.post('/admin/logout', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (token) await deleteDoc('adminSessions', token);
+
+  res.json({ ok: true });
+});
+
+app.get('/admin/me', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (!token) return res.json({ admin: false });
+
+  const session = await getDoc('adminSessions', token);
+
+  res.json({
+    admin: !!session && Date.now() <= session.expiresAt
+  });
+});
+app.post('/admin/logout', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (token) await deleteDoc('adminSessions', token);
+
+  res.json({ ok: true });
+});
+
+app.get('/admin/me', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (!token) return res.json({ admin: false });
+
+  const session = await getDoc('adminSessions', token);
+
+  res.json({
+    admin: !!session && Date.now() <= session.expiresAt
+  });
+});
 
 app.get('/employees', requireAdmin, async (_req, res) => res.json((await listCollection('employees')).sort((a,b)=>a.name.localeCompare(b.name))));
 app.post('/employees', requireAdmin, async (req, res) => {
@@ -170,6 +246,14 @@ app.patch('/attendance/:attId', requireAdmin, async (req, res) => { const rec = 
 app.get('/attendance', requireAdmin, async (req, res) => res.json(await attendanceRows(req.query)));
 app.get('/attendance/sessions', requireAdmin, async (req, res) => res.json(pairSessions(await attendanceRows(req.query))));
 app.get('/events', requireAdmin, async (req, res) => res.json(await listEvents(req.query.limit || 80)));
-app.get('/debug', (req, res) => res.json({ ok: true, origin: requestOrigin(req), publicOrigin: PUBLIC_ORIGIN, allowedOrigins: ALLOWED_ORIGINS, rpID: RP_ID }));
+app.get('/debug', (req, res) => res.json({
+  ok: true,
+  version: 'admin-token-v2',
+  origin: requestOrigin(req),
+  publicOrigin: PUBLIC_ORIGIN,
+  allowedOrigins: ALLOWED_ORIGINS,
+  rpID: RP_ID,
+  adminEmail: ADMIN_EMAIL
+}));
 
 export const api = onRequest({ region: 'europe-west1', timeoutSeconds: 60, memory: '512MiB' }, app);
