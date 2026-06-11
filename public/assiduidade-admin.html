@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Assiduidade · Manager</title>
+  <link rel="stylesheet" href="/cbr.css">
+  <style>
+    .miniGrid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+    .span3{grid-column:span 3}.span4{grid-column:span 4}.span6{grid-column:span 6}.span8{grid-column:span 8}.span12{grid-column:span 12}
+    .stat{padding:14px;border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.055)}
+    .stat b{display:block;font-size:1.35rem;color:var(--gold2)}
+    .tiny{font-size:12px;color:var(--muted)}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+    .toolbar>*{min-width:160px;flex:1}.toolbar .btn{flex:0 0 auto;min-width:140px}
+    .dangerText{color:var(--bad)}.okText{color:var(--ok)}
+    @media(max-width:900px){.span3,.span4,.span6,.span8{grid-column:span 12}.toolbar>*{min-width:100%}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <header class="pageHead">
+    <img class="pageLogo" src="https://i.imgur.com/8mfDXWb.png" alt="CBR">
+    <h1>Gestão do Registo de Ponto</h1>
+    <p class="subtitle">Funcionários · Entradas pessoa a pessoa · Registos manuais · Exportação</p>
+    <div class="row" style="justify-content:center;margin-top:14px">
+      <a class="pill" href="/assiduidade-qr.html" target="_blank">Abrir QR Tablet</a>
+      <a class="pill" href="/assiduidade-setup.html" target="_blank">Setup Passkey</a>
+      <button class="btn secondary" id="logout" style="display:none">Sair</button>
+    </div>
+  </header>
+
+  <section id="loginCard" class="card" style="max-width:520px;margin:60px auto">
+    <h2>Acesso Restrito</h2>
+    <p class="hint">Coloca as credenciais de acesso.</p>
+    <label>Utilizador</label><input id="adminEmail" value="manager">
+    <label>Password</label><input id="adminPass" type="password" value="">
+    <button class="btn" id="adminLogin" style="width:100%;margin-top:14px">Entrar</button>
+    <div class="toast" id="loginMsg">Em caso de erro, contactar o Joel, para que tente resolver.</div>
+  </section>
+
+  <section id="app" style="display:none" class="grid">
+    <article class="card full">
+      <div class="row space"><h2>Visão Geral</h2><button class="btn secondary" id="refreshAll">Atualizar tudo</button></div>
+      <div class="miniGrid">
+        <div class="stat span3"><b id="statActive">0</b><span>colaboradores ativos</span></div>
+        <div class="stat span3"><b id="statToday">0</b><span>registos hoje</span></div>
+        <div class="stat span3"><b id="statOpen">0</b><span>entradas abertas</span></div>
+        <div class="stat span3"><b id="statManual">0</b><span>registos manuais</span></div>
+      </div>
+    </article>
+
+    <article class="card two">
+      <div class="row space"><h2>Gestão de Funcionários</h2><span class="pill" id="empCount">0 ativos</span></div>
+      <div class="grid" style="gap:10px">
+        <div class="half"><label>Nome</label><input id="empName" placeholder="Ex: Helena Silva"></div>
+        <div class="half"><label>Email</label><input id="empEmail" placeholder="helena@cbr.local"></div>
+        <div class="half"><label>Departamento</label><input id="empDep" placeholder="Receção / HSK / F&B"></div>
+        <div class="half" style="display:flex;align-items:end"><button class="btn" id="addEmp" style="width:100%">Adicionar</button></div>
+      </div>
+      <div style="overflow:auto;margin-top:18px">
+        <table class="table"><thead><tr><th>Colaborador</th><th>Departamento</th><th>Estado</th><th>Dispositivo</th><th>Ações</th></tr></thead><tbody id="empRows"></tbody></table>
+      </div>
+    </article>
+
+    <article class="card third">
+      <h2>Adicionar Registo Manual</h2>
+      <label>Colaborador</label><select id="manualEmp"></select>
+      <label>Tipo</label><select id="manualType"><option value="entrada">Entrada</option><option value="saida">Saída</option></select>
+      <label>Data e hora</label><input id="manualTs" type="datetime-local">
+      <label>Nota interna</label><input id="manualNote" placeholder="Ex: esquecimento de picagem">
+      <button class="btn ok" id="addManual" style="width:100%;margin-top:14px">Adicionar manualmente</button>
+      <div class="toast" id="manualMsg">Usa isto para corrigir esquecimentos ou falhas técnicas.</div>
+    </article>
+
+    <article class="card full">
+      <div class="row space"><h2>Entradas Pessoa a Pessoa</h2><button class="btn secondary" id="loadPerson">Carregar</button></div>
+      <div class="toolbar">
+        <div><label>Colaborador</label><select id="personEmp"></select></div>
+        <div><label>Data inicial</label><input id="personFrom" type="date"></div>
+        <div><label>Data final</label><input id="personTo" type="date"></div>
+        <button class="btn" id="exportXlsx">Exportar XLSX</button>
+      </div>
+      <div class="miniGrid" style="margin-top:14px">
+        <div class="stat span4"><b id="personTotal">—</b><span>horas no período</span></div>
+        <div class="stat span4"><b id="personSessions">—</b><span>turnos fechados</span></div>
+        <div class="stat span4"><b id="personProblems">—</b><span>registos por resolver</span></div>
+      </div>
+      <div style="overflow:auto;margin-top:18px">
+        <table class="table">
+          <thead><tr><th>Colaborador</th><th>Entrada</th><th>Saída</th><th>Duração</th><th>Estado</th><th>Origem</th></tr></thead>
+          <tbody id="personRows"></tbody>
+        </table>
+      </div>
+      <div class="toast" id="reportMsg">Seleciona colaborador e período, ou deixa em “Todos”.</div>
+    </article>
+
+    <article class="card two">
+      <div class="row space"><h2>Tempo Real</h2><button class="btn secondary" id="refreshEvents">Atualizar</button></div>
+      <div class="feed" id="feed"></div>
+    </article>
+
+    <article class="card third">
+      <h2>Estado do Sistema</h2>
+      <p class="pill">Subdomínio recomendado: assiduidade.cbrintranet.online</p>
+      <p class="pill">QR dinâmico: 5s no ecrã / 45s de validade</p>
+      <p class="pill">Passkey: ativa</p>
+      <p class="pill" id="lastEvent">Último evento: —</p>
+      <p class="hint">Para produção, aponta o subdomínio para o mesmo serviço Node via Cloudflare Tunnel e define PUBLIC_ORIGIN.</p>
+    </article>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let employees = [];
+let currentSessions = [];
+function fmt(ts){return ts ? new Date(ts).toLocaleString('pt-PT',{dateStyle:'short',timeStyle:'short'}) : '—'}
+function fmtDateInput(d){return d.toISOString().slice(0,10)}
+function fmtDuration(min){if(min===null || min===undefined) return '—'; const h=Math.floor(min/60), m=min%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`}
+function todayLocalDate(){return fmtDateInput(new Date())}
+function nowLocalInput(){const d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,16)}
+async function api(url, opts = {}) {
+  const r = await fetch(url, { credentials:'include', ...opts, headers:{'Content-Type':'application/json', ...(opts.headers || {})} });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Erro');
+  return d;
+}
+async function checkAdmin(){
+  const d = await api('/api/admin/me');
+  if(d.admin){$('loginCard').style.display='none';$('app').style.display='grid';$('logout').style.display='inline-flex';initDates();loadAll()}
+}
+function initDates(){
+  if(!$('personFrom').value) $('personFrom').value = todayLocalDate();
+  if(!$('personTo').value) $('personTo').value = todayLocalDate();
+  if(!$('manualTs').value) $('manualTs').value = nowLocalInput();
+}
+$('adminLogin').onclick=async()=>{try{await api('/api/admin/login',{method:'POST',body:JSON.stringify({email:$('adminEmail').value,password:$('adminPass').value})});checkAdmin()}catch(e){$('loginMsg').textContent='⚠️ '+e.message}};
+$('logout').onclick=async()=>{await api('/api/admin/logout',{method:'POST'});location.reload()};
+$('refreshAll').onclick=()=>loadAll();
+
+async function loadEmployees(){
+  employees=await api('/api/employees');
+  $('empCount').textContent=employees.filter(e=>e.active).length+' ativos';
+  $('statActive').textContent=employees.filter(e=>e.active).length;
+  $('empRows').innerHTML=employees.map(e=>`<tr><td><b>${e.name}</b><br><span class="muted">${e.email}</span></td><td>${e.department||'—'}</td><td><span class="status ${e.active?'ok':'bad'}">${e.active?'Ativo':'Inativo'}</span></td><td><span class="status ${e.deviceAuthorized?'ok':'warn'}">${e.deviceAuthorized?'Autorizado':'Pendente'}</span></td><td><div class="row"><button class="btn secondary" onclick="setupLink('${encodeURIComponent(e.email)}')">Setup</button><button class="btn secondary" onclick="revoke('${e.id}')">Revogar</button><button class="btn danger" onclick="disableEmp('${e.id}')">Desativar</button></div></td></tr>`).join('');
+  const optsAll='<option value="">Todos</option>'+employees.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+  const optsRequired='<option value="">Selecionar…</option>'+employees.filter(e=>e.active).map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+  $('personEmp').innerHTML=optsAll;
+  $('manualEmp').innerHTML=optsRequired;
+}
+$('addEmp').onclick=async()=>{try{await api('/api/employees',{method:'POST',body:JSON.stringify({name:$('empName').value,email:$('empEmail').value,department:$('empDep').value})});$('empName').value=$('empEmail').value=$('empDep').value='';loadAll()}catch(e){alert(e.message)}};
+window.setupLink=(emailEnc)=>{const email=decodeURIComponent(emailEnc); const url=location.origin+'/assiduidade-setup.html?email='+encodeURIComponent(email);navigator.clipboard?.writeText(url);alert('Link de setup copiado/gerado:\n\n'+url+'\n\nAbre este link no telemóvel do colaborador para criar a passkey.');};
+window.disableEmp=async(id)=>{if(confirm('Desativar colaborador?')){await api('/api/employees/'+id,{method:'DELETE'});loadAll()}};
+window.revoke=async(id)=>{if(confirm('Revogar telemóvel/passkey deste colaborador?')){await api('/api/employees/'+id+'/revoke-device',{method:'POST'});loadAll()}};
+
+$('addManual').onclick=async()=>{
+  try{
+    if(!$('manualEmp').value) throw new Error('Escolhe um colaborador.');
+    await api('/api/attendance/manual',{method:'POST',body:JSON.stringify({employeeId:$('manualEmp').value,type:$('manualType').value,ts:$('manualTs').value,note:$('manualNote').value})});
+    $('manualNote').value=''; $('manualMsg').textContent='✅ Registo manual adicionado.'; await loadAll();
+  }catch(e){$('manualMsg').textContent='⚠️ '+e.message}
+};
+
+async function loadPersonView(){
+  const q=new URLSearchParams();
+  if($('personEmp').value) q.set('employeeId',$('personEmp').value);
+  if($('personFrom').value) q.set('from',$('personFrom').value);
+  if($('personTo').value) q.set('to',$('personTo').value);
+  currentSessions=await api('/api/attendance/sessions?'+q);
+  const closed=currentSessions.filter(s=>s.status==='fechado');
+  const problems=currentSessions.filter(s=>s.status!=='fechado');
+  const totalMin=closed.reduce((sum,s)=>sum+(s.minutes||0),0);
+  $('personTotal').textContent=fmtDuration(totalMin);
+  $('personSessions').textContent=closed.length;
+  $('personProblems').textContent=problems.length;
+  $('personRows').innerHTML=currentSessions.map(s=>{
+    const manual=(s.entrada?.manual||s.saida?.manual)?'Manual':'Normal';
+    const state=s.status==='fechado'?'<span class="okText">Fechado</span>':s.status==='sem_saida'?'<span class="dangerText">Sem saída</span>':'<span class="dangerText">Saída sem entrada</span>';
+    return `<tr><td><b>${s.name}</b><br><span class="muted">${s.department||'—'}</span></td><td>${fmt(s.entrada?.ts)}</td><td>${fmt(s.saida?.ts)}</td><td>${fmtDuration(s.minutes)}</td><td>${state}</td><td>${manual}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">Sem registos no período.</td></tr>';
+  $('reportMsg').textContent=`✅ ${currentSessions.length} linhas carregadas.`;
+}
+$('loadPerson').onclick=loadPersonView;
+
+async function loadDashboardStats(){
+  const q=new URLSearchParams({from:todayLocalDate(),to:todayLocalDate()});
+  const rows=await api('/api/attendance?'+q);
+  const sessions=await api('/api/attendance/sessions?'+q);
+  $('statToday').textContent=rows.length;
+  $('statManual').textContent=rows.filter(r=>r.manual).length;
+  $('statOpen').textContent=sessions.filter(s=>s.status==='sem_saida').length;
+}
+async function loadEvents(){
+  const evs=await api('/api/events?limit=80');
+  $('lastEvent').textContent='Último evento: '+(evs[0]?fmt(evs[0].ts):'—');
+  $('feed').innerHTML=evs.map(e=>`<div class="event"><span class="dot ${e.type}"></span><div><b>${e.message}</b><div class="muted">${e.type}</div></div><div class="time">${fmt(e.ts)}</div></div>`).join('')||'<p class="muted">Sem eventos.</p>';
+}
+$('refreshEvents').onclick=loadEvents;
+setInterval(()=>{if($('app').style.display!=='none')loadEvents()},5000);
+
+$('exportXlsx').onclick=()=>{
+  const rows=currentSessions.map(s=>({
+    'Colaborador':s.name,
+    'Departamento':s.department||'',
+    'Entrada':fmt(s.entrada?.ts),
+    'Saída':fmt(s.saida?.ts),
+    'Número de Horas':fmtDuration(s.minutes),
+    'Estado':s.status,
+    'Origem':(s.entrada?.manual||s.saida?.manual)?'Manual':'Normal'
+  }));
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[{wch:28},{wch:18},{wch:18},{wch:18},{wch:18},{wch:18},{wch:12}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Assiduidade');
+  XLSX.writeFile(wb,'CBR_Assiduidade_Pessoa_a_Pessoa.xlsx');
+  $('reportMsg').textContent=`✅ XLSX exportado com ${rows.length} linhas.`;
+};
+async function loadAll(){await loadEmployees();await Promise.all([loadDashboardStats(),loadEvents(),loadPersonView()])}
+checkAdmin().catch(()=>{});
+</script>
+</body>
+</html>

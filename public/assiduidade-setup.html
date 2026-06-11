@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CBR · Configuração Inicial</title>
+  <link rel="stylesheet" href="/cbr.css">
+</head>
+<body>
+<main class="center" style="display:block">
+  <div style="width:min(520px,100%);margin:0 auto;padding-top:28px">
+    <header class="pageHead">
+      <img class="pageLogo" src="https://i.imgur.com/8mfDXWb.png" alt="CBR">
+      <h1>Configuração Inicial</h1>
+      <p class="subtitle">Registar telemóvel autorizado para registo de ponto.</p>
+    </header>
+    <section class="card phone" style="margin:0 auto">
+      <label>Email do colaborador</label>
+      <input id="email" placeholder="nome@exemplo.com" autocomplete="email">
+      <button class="btn" id="register" style="width:100%;margin-top:14px">Criar passkey neste telemóvel</button>
+      <div class="toast" id="msg">Antes de continuar, certifica-te de que o Joel já te registou no sistema.</div>
+      <div class="row" style="justify-content:center;margin-top:14px">
+        <a class="pill" href="/index.html" style="text-decoration:none">← Início</a>
+      </div>
+    </section>
+  </div>
+</main>
+<script src="https://unpkg.com/@simplewebauthn/browser/dist/bundle/index.umd.min.js"></script>
+<script>
+const { startRegistration } = SimpleWebAuthnBrowser;
+const msg = document.getElementById('msg');
+const params = new URL(location.href).searchParams;
+if (params.get('email')) document.getElementById('email').value = params.get('email');
+
+document.getElementById('register').onclick = async () => {
+  try {
+    const email = document.getElementById('email').value.trim();
+    if (!email) throw new Error('Indica o email.');
+    msg.textContent = 'A preparar passkey…';
+    let r = await fetch('/api/passkey/register/options', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ email })
+    });
+    let opts = await r.json();
+    if (!r.ok) throw new Error(opts.error || 'Erro nas opções');
+    const attResp = await startRegistration(opts);
+    msg.textContent = 'A validar passkey…';
+    r = await fetch('/api/passkey/register/verify', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ email, response:attResp })
+    });
+    const out = await r.json();
+    if (!r.ok) throw new Error(out.details || out.error);
+    msg.textContent = '✅ Telemóvel autorizado para ' + out.employee.name + '.';
+  } catch(e) {
+    msg.textContent = '⚠️ ' + e.message;
+    console.error(e);
+  }
+};
+</script>
+</body>
+</html>

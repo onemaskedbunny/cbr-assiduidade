@@ -1,0 +1,20 @@
+{
+  "name": "cbr-assiduidade-functions",
+  "version": "1.0.0-cloud",
+  "type": "module",
+  "engines": { "node": "20" },
+  "main": "index.js",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions,hosting,firestore",
+    "deploy": "firebase deploy --only functions,hosting,firestore:rules"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "latest",
+    "cookie-parser": "latest",
+    "express": "latest",
+    "firebase-admin": "latest",
+    "firebase-functions": "latest",
+    "qrcode": "latest"
+  },
+  "devDependencies": {}
+}

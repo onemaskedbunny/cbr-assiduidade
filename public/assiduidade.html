@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CBR · Assiduidade</title>
+  <link rel="stylesheet" href="/cbr.css">
+</head>
+<body>
+  <main class="center">
+    <img
+      src="https://i.imgur.com/8mfDXWb.png"
+      alt="CBR Boutique Hotel"
+      style="max-width:180px;margin-bottom:16px;filter:drop-shadow(0 8px 18px rgba(0,0,0,.45));"
+    >
+
+    <section class="card phone">
+      <div class="brand" style="justify-content:center;text-align:center">
+        <div>
+          <h1>Registo de Ponto</h1>
+          <p class="subtitle">Assiduidade & Pontualidade</p>
+        </div>
+      </div>
+
+      <div id="authArea">
+        <button class="btn" id="login" style="width:100%;margin-top:16px">Entrar com passkey</button>
+      </div>
+
+      <div id="workArea" style="display:none">
+        <p class="pill" id="who">—</p>
+        <div class="splitBtns">
+          <button class="btn ok" id="entrada">Entrada</button>
+          <button class="btn danger" id="saida">Saída</button>
+        </div>
+      </div>
+
+      <div class="toast" id="msg">A validar QR…</div>
+
+      <div id="confirmArea" style="display:none;margin-top:12px">
+        <button class="btn ok" id="confirmEntrada" style="width:100%">
+          Confirmar e iniciar nova entrada
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/@simplewebauthn/browser/dist/bundle/index.umd.min.js"></script>
+  <script>
+    const { startAuthentication } = SimpleWebAuthnBrowser;
+
+    const token = new URL(location.href).searchParams.get('t');
+    const msg = document.getElementById('msg');
+    const login = document.getElementById('login');
+    const work = document.getElementById('workArea');
+    const auth = document.getElementById('authArea');
+    const confirmArea = document.getElementById('confirmArea');
+    const confirmEntrada = document.getElementById('confirmEntrada');
+
+    let me = null;
+
+    function hideConfirm(){
+      confirmArea.style.display = 'none';
+    }
+
+    function formatDateTimePT(iso){
+      const d = new Date(iso);
+      const date = d.toLocaleDateString('pt-PT');
+      const time = d.toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+      return `${date} às ${time}`;
+    }
+
+    async function checkQr(){
+      if(!token){
+        msg.textContent = '⚠️ Falta token QR. Lê o QR dinâmico.';
+        login.disabled = true;
+        return;
+      }
+
+      const r = await fetch('/api/qr/check/' + token);
+      const d = await r.json();
+
+      if(!r.ok){
+        msg.textContent = '⚠️ ' + (d.error === 'QR_EXPIRADO'
+          ? 'QR expirado. Lê novamente o código no tablet.'
+          : 'QR inválido.');
+        login.disabled = true;
+        return;
+      }
+
+      msg.textContent = 'QR válido. Autentica-te com passkey.';
+    }
+
+    async function refreshMe(){
+      const r = await fetch('/api/staff/me');
+
+      if(r.ok){
+        me = await r.json();
+        document.getElementById('who').textContent = `${me.name}${me.department ? ' · ' + me.department : ''}`;
+        auth.style.display = 'none';
+        work.style.display = 'block';
+        msg.textContent = 'Escolhe Entrada ou Saída.';
+      }
+    }
+
+    async function doPasskeyLogin(){
+      msg.textContent = 'A abrir passkey…';
+
+      let r = await fetch('/api/passkey/auth/options', { method:'POST' });
+      let opts = await r.json();
+
+      const asseResp = await startAuthentication(opts);
+
+      r = await fetch('/api/passkey/auth/verify', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ response: asseResp })
+      });
+
+      const out = await r.json();
+      if(!r.ok) throw new Error(out.details || out.error);
+
+      await refreshMe();
+    }
+
+    login.onclick = async () => {
+      try{
+        hideConfirm();
+        await doPasskeyLogin();
+      }catch(e){
+        msg.textContent = '⚠️ ' + e.message;
+        console.error(e);
+      }
+    };
+
+    async function mark(type, forceNew = false){
+      try{
+        hideConfirm();
+
+        if(type === 'entrada' && !forceNew){
+          await doPasskeyLogin();
+        }
+
+        msg.textContent = 'A registar…';
+
+        const r = await fetch('/api/attendance/mark', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ token, type, forceNew })
+        });
+
+        const out = await r.json();
+
+        if(!r.ok){
+          if(out.error === 'JA_EXISTE_ENTRADA_ATIVA' && type === 'entrada' && out.activeEntry){
+            const when = formatDateTimePT(out.activeEntry.ts);
+            msg.textContent = `⚠️ Já existe uma entrada ativa, sem saída no dia ${when}. Vais fechar esse dia sem saída e iniciar uma nova entrada?`;
+            confirmArea.style.display = 'block';
+            confirmEntrada.onclick = () => mark('entrada', true);
+            return;
+          }
+
+          throw new Error(out.error);
+        }
+
+        msg.textContent = (type === 'entrada' ? '✅ Entrada' : '✅ Saída') +
+          ' registada às ' +
+          new Date(out.record.ts).toLocaleTimeString('pt-PT', { hour:'2-digit', minute:'2-digit' });
+
+      }catch(e){
+        const map = {
+          JA_EXISTE_ENTRADA_ATIVA:'Já existe uma entrada ativa.',
+          NAO_EXISTE_ENTRADA_ABERTA:'Não existe entrada anterior para fechar.',
+          QR_EXPIRADO:'QR expirado. Lê novamente o código no tablet.',
+          QR_INVALIDO:'QR inválido.',
+          NAO_AUTORIZADO:'Sessão inválida. Entra novamente com passkey.'
+        };
+
+        msg.textContent = '⚠️ ' + (map[e.message] || e.message);
+      }
+    }
+
+    document.getElementById('entrada').onclick = () => mark('entrada');
+    document.getElementById('saida').onclick = () => mark('saida');
+
+    checkQr().then(refreshMe);
+  </script>
+</body>
+</html>

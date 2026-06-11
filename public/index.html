@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CBR · Assiduidade</title>
+  <link rel="stylesheet" href="/cbr.css">
+  <style>
+    .homeLogo{max-width:180px;margin:0 auto 14px;display:block;filter:drop-shadow(0 8px 18px rgba(0,0,0,.45))}
+    .homeTop{text-align:center;margin-bottom:20px}
+    .homeTop h1{font-size:1.75rem;letter-spacing:.2px}
+    .homeGrid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;align-items:stretch}
+    .homeCard{position:relative;min-height:270px;display:flex;flex-direction:column;justify-content:flex-start;cursor:pointer;transition:transform .18s,background .18s}
+    .homeCard:hover{transform:translateY(-4px);background:rgba(255,255,255,.11)}
+    .big{grid-column:span 8}.small{grid-column:span 4}
+    .homeTitle{font-weight:950;font-size:1.35rem}.homeDesc{opacity:.78;margin-top:10px;line-height:1.45rem;font-size:.98rem}
+    .homeIcon{font-size:2.1rem}.homeTags{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+    @media(max-width:860px){.big,.small{grid-column:span 12}.homeCard{min-height:220px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="homeTop">
+      <img class="homeLogo" src="https://i.imgur.com/8mfDXWb.png" alt="CBR">
+      <h1>Registo de Ponto</h1>
+      <p class="subtitle">Registo de Entrada e Saída do Colaborador</p>
+      <div class="row" style="justify-content:center;margin-top:12px">
+        <span class="pill" id="timePill">🕒 —</span>
+        <span class="pill">🟢 Versão Beta</span>
+      </div>
+    </section>
+
+    <section class="homeGrid">
+      <article class="card homeCard big" onclick="location.href='/assiduidade-qr.html'">
+        <div>
+          <div class="row space">
+            <div class="homeTitle">Ecrã de Registo de Ponto</div>
+            <div class="homeIcon">▦</div>
+          </div>
+          <div class="homeDesc">Abrir o ecrã do tablet com QR dinâmico para registos de entrada e saída.</div>
+          <div class="homeTags">
+            <span class="status ok">QR Dinâmico</span>
+            <span class="status ok">5 segundos</span>
+            <span class="status warn">Requer Passkey</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card homeCard small" onclick="location.href='/assiduidade-admin.html'">
+        <div>
+          <div class="row space">
+            <div class="homeTitle">Gestão</div>
+            <div class="homeIcon">⚙</div>
+          </div>
+          <div class="homeDesc">Registo de Colaboradores, Gestão de Acessos e Relatórios.</div>
+          <div class="homeTags">
+            <span class="status warn">Direção - Management</span>
+            <span class="status ok">Relatórios</span>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script>
+    function tick(){document.getElementById('timePill').textContent='🕒 '+new Date().toLocaleString('pt-PT',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}tick();setInterval(tick,30000);
+  </script>
+</body>
+</html>
